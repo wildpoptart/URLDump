@@ -1,96 +1,83 @@
-// popup.js
 document.addEventListener('DOMContentLoaded', async () => {
-    const elements = {
-      tabsList: document.getElementById('tabsList'),
-      downloadBtn: document.getElementById('downloadBtn'),
-      downloadAllBtn: document.getElementById('downloadAllBtn'),
-      loadBtn: document.getElementById('loadBtn'),
-      fileInput: document.getElementById('fileInput'),
-      filenameModal: document.getElementById('filenameModal'),
-      filenameModalContent: document.getElementById('filenameModalContent'),
-      filenameInput: document.getElementById('filenameInput'),
-      saveFilenameBtn: document.getElementById('saveFilenameBtn')
-    };
-  
-    let urls = [];
-    let selectedUrls = [];
-    let downloadType = '';
-  
-    const renderTabs = async () => {
+  const elements = Object.fromEntries(
+    ['tabsList', 'downloadBtn', 'downloadAllBtn', 'loadBtn', 'fileInput', 'filenameModal', 'filenameInput', 'saveFilenameBtn']
+    .map(id => [id, document.getElementById(id)])
+  );
+
+  let urls = [];
+
+  const renderTabs = async () => {
+    try {
       const tabs = await browser.tabs.query({ currentWindow: true });
-      const validTabs = tabs.filter(tab => tab.url && !tab.url.startsWith('about:'));
+      const tabElements = tabs
+        .filter(tab => tab.url && !tab.url.startsWith('about:'))
+        .map(tab => {
+          urls.push(tab.url);
+          return `<li><input type="checkbox" value="${tab.url}" /> ${tab.title}</li>`;
+        });
+
+      elements.tabsList.innerHTML = tabElements.join('');
       
-      const tabElements = validTabs.map((tab, index) => {
-        const li = document.createElement('li');
-        li.innerHTML = `<input type="checkbox" id="checkbox-${index}" value="${tab.url}" /> ${tab.title}`;
-        urls.push(tab.url);
-        return li;
-      });
-  
-      elements.tabsList.append(...tabElements);
-    };
-  
-    const ensureTxtExtension = (filename) => 
-      filename.endsWith('.txt') ? filename : `${filename}.txt`;
-  
-    const downloadURLs = (urls, filename) => {
-      const blob = new Blob([urls.join('\n')], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = ensureTxtExtension(filename);
-      a.click();
-      URL.revokeObjectURL(url);
-    };
-  
-    const showFilenamePrompt = (type) => {
-      downloadType = type;
-      elements.filenameModal.style.display = 'flex';
-    };
-  
-    const closeFilenameModal = () => {
-      elements.filenameModal.style.display = 'none';
-      elements.filenameInput.value = '';
-    };
-  
-    const handleSaveFilename = () => {
+      if (urls.length === 0) {
+        elements.downloadBtn.disabled = true;
+        elements.downloadAllBtn.disabled = true;
+      } else {
+        elements.downloadBtn.disabled = false;
+        elements.downloadAllBtn.disabled = false;
+      }
+    } catch (error) {
+      console.error('Failed to render tabs:', error);
+    }
+  };
+
+  const downloadURLs = (urls, filename) => {
+    const blob = new Blob([urls.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    Object.assign(document.createElement('a'), {
+      href: url,
+      download: filename.endsWith('.txt') ? filename : `${filename}.txt`
+    }).click();
+    URL.revokeObjectURL(url);
+  };
+
+  const showFilenamePrompt = (type) => {
+    elements.filenameModal.style.display = 'flex';
+    elements.saveFilenameBtn.onclick = () => {
       const filename = elements.filenameInput.value.trim();
       if (filename) {
-        downloadURLs(downloadType === 'selected' ? selectedUrls : urls, filename);
-        closeFilenameModal();
-      } else {
-        alert('Please enter a filename.');
+        downloadURLs(type === 'selected' 
+          ? [...elements.tabsList.querySelectorAll('input:checked')].map(cb => cb.value)
+          : urls, 
+        filename);
+        elements.filenameModal.style.display = 'none';
+        elements.filenameInput.value = '';
       }
     };
-  
-    const handleDownload = () => {
-      selectedUrls = Array.from(document.querySelectorAll('input[type="checkbox"]:checked'))
-        .map(checkbox => checkbox.value);
-      
-      if (selectedUrls.length > 0) {
-        showFilenamePrompt('selected');
-      } else {
-        alert('No URLs selected!');
-      }
-    };
-  
-    const handleFileLoad = async (file) => {
-      const contents = await file.text();
-      const urlsToLoad = contents.split('\n').filter(url => url.trim());
-      await Promise.all(urlsToLoad.map(url => browser.tabs.create({ url })));
-    };
-  
-    await renderTabs();
-  
-    elements.saveFilenameBtn.addEventListener('click', handleSaveFilename);
-    elements.filenameModal.addEventListener('click', (event) => {
-      if (event.target === elements.filenameModal) closeFilenameModal();
-    });
-    elements.downloadBtn.addEventListener('click', handleDownload);
-    elements.downloadAllBtn.addEventListener('click', () => showFilenamePrompt('all'));
-    elements.loadBtn.addEventListener('click', () => elements.fileInput.click());
-    elements.fileInput.addEventListener('change', async (event) => {
-      const file = event.target.files[0];
-      if (file) await handleFileLoad(file);
-    });
-  });
+  };
+
+  const handleFileLoad = async (file) => {
+    try {
+      const tabsArray = (await file.text()).split('\n').filter(url => url.trim());
+      const { id: windowId } = await browser.windows.getCurrent();
+      await Promise.all(tabsArray.map(url => 
+        browser.tabs.create({ windowId, url }).catch(error => 
+          console.error(`Failed to create tab for URL: ${url}`, error)
+        )
+      ));
+    } catch (error) {
+      console.error('Failed to load file:', error);
+    }
+  };
+
+  await renderTabs();
+
+  elements.downloadBtn.onclick = () => showFilenamePrompt('selected');
+  elements.downloadAllBtn.onclick = () => showFilenamePrompt('all');
+  elements.loadBtn.onclick = () => elements.fileInput.click();
+  elements.fileInput.onchange = (event) => handleFileLoad(event.target.files[0]);
+  elements.filenameModal.onclick = (event) => {
+    if (event.target === elements.filenameModal) {
+      elements.filenameModal.style.display = 'none';
+    }
+  };
+});
